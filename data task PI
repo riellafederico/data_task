@@ -1,0 +1,316 @@
+---
+title: "Policy Impacts Data Task"
+output:
+  pdf_document: default
+  html_document: default
+subtitle: "Federico Riella"
+date: "October 2023"
+---
+
+```{r setup, include=F , eval=T}
+##### load packages ####
+
+library(tidyverse)
+library(latex2exp)
+library(dplyr)
+library(readxl)
+library(binsreg)
+library(ggplot2)
+library(wCorr)
+library(mgcv)
+library(psycho)
+library(corrplot)
+library(xtable)
+library(Hmisc)
+library(rmarkdown)
+library(gt)
+library(extraDistr)
+library(rlang)
+library(knitr)
+library(kableExtra)
+library(stringr)
+library(gtsummary)
+library(stargazer)
+
+
+
+#### set Working Directory (if running the code please set you own) ####
+
+setwd("C:/Users/riell/Desktop/PI_data_task/PI_data_task")
+
+#### load databases ####
+
+cz_centroids <- read.delim("cz_centroids.csv", sep = ",")
+
+od_counts <- read.delim("od_counts.csv", sep = ",")
+
+
+```
+# Question 1
+
+### 1.1
+```{r 1.1, include=F, eval=T, echo=F}
+
+# we proceed to make an iteration that calculates origin probability
+
+cz <- unique(od_counts$o_cz) #identify unique origins
+results_o <- data.frame(o_cz = cz, p_o = numeric(length(cz))) #aux DF to store results
+n <- data.frame(o_cz = cz, p_o = numeric(length(cz))) #aux DF to store results
+
+for (i in cz) {
+  
+  a_n <- od_counts %>% select(o_cz, d_cz, n) %>% filter(o_cz == i) # selecting just one origin
+  n <- sum(a_n$n) #sum people with that specific origin
+  N <- sum(od_counts$n) #total amount of people
+  results_o[results_o$o_cz == i, "p_o"] <- (n/N) #calculate the odds of having a specific origin
+
+  }
+
+# same procedure what to obtain destination probabilities
+
+cz <- unique(od_counts$d_cz) #identify unique destinations
+results_d <- data.frame(d_cz = cz, p_d = numeric(length(cz))) #aux DF to store results
+n <- data.frame(d_cz = cz, p_d = numeric(length(cz))) #aux DF to store results
+
+for (i in cz) {
+  
+  a_n <- od_counts %>% select(o_cz, d_cz, n) %>% filter(d_cz == i) # selecting just one destination
+  n <- sum(a_n$n) #sum people with that specific destination
+  N <- sum(od_counts$n) #total amount of people
+  results_d[results_d$d_cz == i, "p_d"] <- (n/N) #calculate the odds of having a specific origin
+  
+}
+
+od_counts <- merge(x = od_counts, results_d, by.x = "d_cz", by.y = "d_cz", all.x = TRUE) # merge the probability of having a specific destination to the original database
+od_counts <- merge(x = od_counts, results_o, by.x = "o_cz", by.y = "o_cz", all.x = TRUE) # merge the probability of having a specific origin to the original database
+
+# we proceed to calculate the conditional probabilities
+
+# Since probability of having an specific origin given you destination y the n column of each row divided total N, now we can easily proceed to calculate conditional probabilities 
+
+od_counts$cond_prob <- ((od_counts$n / N)*(od_counts$p_d)) / (od_counts$p_o)
+```
+```{r plot, include=T, eval=T, echo = F}
+# we select the top ten commuting zones for the table
+table_data <- od_counts[order(od_counts$cond_prob, decreasing = TRUE),]   %>% slice(1:10)  %>% select(o_name, cond_prob)
+
+# Configurate the the table to show results
+ gt_tbl <-
+  gt(table_data, rownames_to_stub = TRUE) %>%
+  tab_header(
+    title = "Conditional Probabilities",
+    subtitle = "Top Ten Commuting Zones",
+  )  %>%
+  cols_label(o_name = 'Commuting Zone',
+             cond_prob = md("$P_d|o$")#
+             ) %>%
+  tab_style(
+    style = cell_text(weight = "bold", size = 12),
+    locations = cells_body(
+      columns = cond_prob
+    )) %>%
+  tab_options(
+    table.width = px(500), # Set the table width
+    table.border.top.color = "black", # Add a black top border
+    table.border.top.width = px(2) # Customize the top border width
+  )
+
+gt_tbl
+```
+
+```{r 1.2, include=T, eval=T, echo=F}
+#### 2 ####
+
+od_counts <- merge(x = od_counts, y = cz_centroids, by.x = "o_cz", by.y = "cz", all.x = TRUE) # merge to get origin centroids
+
+colnames(od_counts) <- c("o_cz", "d_cz", "n", "o_name", "d_name", "p_d", "p_o", "cond_prob", "o_lat", "o_lon")  # setting column names to identify id lat and long are from the origin
+
+# We repeat the process with destination
+
+od_counts <- merge(x = od_counts, y = cz_centroids, by.x = "d_cz", by.y = "cz", all.x = TRUE) 
+
+colnames(od_counts) <- c("o_cz", "d_cz", "n", "o_name", "d_name", "p_d", "p_o", "cond_prob", "o_lat", "o_lon", "d_lat", "d_lon")  # setting column names to identify id lat and long are from the origin
+
+```
+
+```{r 1.3, include=T, eval=T, echo=F}
+#### 3 ####
+
+class(od_counts$d_lon) <- "numeric"
+
+# we calculate the differences between destiny and origin coordenates, turn it into miles and then use the distance formula
+
+od_counts$dist <- sqrt (
+                          (((od_counts$d_lat - od_counts$o_lat)*69.2)^2)
+                         + (((od_counts$d_lon - od_counts$o_lon)*54.6)^2)
+                                 )
+                                     
+
+```
+
+```{r 1.4.a, include=T, eval=T, echo=F}
+#### 4 ####
+
+### a ###
+# first we rank the distnces into ventiles
+od_counts$rank <- ntile(x = od_counts$dist, n = 20)
+
+# calculate average distance by rank with the aggregate function
+avg_dist <- aggregate(dist ~ rank, data = od_counts, FUN = mean)
+colnames(avg_dist) <- c("rank", "avg_dist")
+
+# we repeat the process but to calculate average conditional probability
+avg_cond_prob <- aggregate(cond_prob ~ rank, data = od_counts, FUN = mean)
+colnames(avg_cond_prob) <- c("rank", "avg_Pd|o") #naming average conditional probability by rank avg_Pd|o
+
+# merge the data by rank to get a table to plot
+table_data_2 <-  merge(avg_cond_prob, avg_dist, by.x = "rank", by.y = "rank")
+```
+
+\newpage
+
+### 1.4.b
+
+```{r 1.4.b, include=T, eval=T, echo=F}
+
+### b ###
+
+#plotting settings
+
+ggplot(table_data_2, aes(x = avg_dist, y = `avg_Pd|o`)) +
+  geom_point(size = 3, color = "blue", alpha = 0.7) +  
+  geom_smooth(method = NULL, se = FALSE, color = "red", linetype = "dashed") + 
+  geom_hline(yintercept = 0, linetype = "dashed", color = "gray") +  
+  ggtitle("Relationship Between Distance and Conditional Probability") +
+  theme_minimal() +  
+  labs(x = "Average Distance", y = md("Average P_d|o")) +  
+  theme(plot.title = element_text(hjust = 0.5))  
+
+
+```
+
+
+\newpage
+
+### 1.5.a
+```{r 1.5.a, include=T, eval=T, echo=F}
+#### 5 ####
+
+## a ##
+
+lm_cond_prob <- lm(data = od_counts, cond_prob ~ dist) # run the linear regression
+coef <- (summary(lm_cond_prob)$coefficients) #extract coefficients
+r_squared <- (summary(lm_cond_prob)$r.squared) #extract r_squared
+
+lm_sum <- rbind(coef, r_squared)
+
+#table settings
+
+kable(lm_sum, format = "latex", booktabs = TRUE, longtable = FALSE ,
+    caption = "Linear Regression Results", align = "lccc" ,
+      col.names = c("Coefficient", "Std. Error", "t-value", "P-value"))
+
+
+```
+
+1. We could say that there is evidence in favor that, ceteris paribus, increasing the distance by one mile generates, on average, a reduction of 0.0000002 percentage points in the probability of reaching a destination given your origin.
+
+
+
+\newpage
+
+### 1.5.b
+
+```{r 1.5.b, include=T, eval=T, echo=F}
+
+
+#similar procedure to part b but we select top 50 most  and least populus  origins
+
+## top 50
+reg_data <- od_counts[order(od_counts$n, decreasing = TRUE),]   %>% slice(1:50) 
+
+lm_cond_prob_2 <- lm(data = reg_data, cond_prob ~ dist) # run the linear regression
+coef_2 <- (summary(lm_cond_prob_2)$coefficients)
+r_squared_2 <- (summary(lm_cond_prob_2)$r.squared)
+
+lm_sum_2 <- rbind(coef_2, r_squared_2)
+
+kable(lm_sum_2, format = "latex", booktabs = TRUE, longtable = FALSE ,
+    caption = "Linear Regression Results Top 50", align = "lccc" ,
+      col.names = c("Coefficient", "Std. Error", "t-value", "P-value"))
+
+
+##bottom 50
+
+reg_data_2 <- od_counts[order(od_counts$n),]   %>% slice(1:50) 
+
+lm_cond_prob_3 <- lm(data = reg_data_2, cond_prob ~ dist) # run the linear regression
+coef_3 <- (summary(lm_cond_prob_3)$coefficients)
+
+r_squared_3 <- (summary(lm_cond_prob_3)$r.squared)
+
+lm_sum_3 <- rbind(coef_3, r_squared_3)
+
+kable(lm_sum_3, format = "latex", booktabs = TRUE, longtable = FALSE ,
+    caption = "Linear Regression Results Bottom 50", align = "lccc" ,
+      col.names = c("Coefficient", "Std. Error", "t-value", "P-value"))
+
+```
+
+As we can see in the two tables presented above, the coefficients  significantly differ
+
+### 5.c
+
+In this case it would perhaps be more accurate to assume that the marginal effects are not constant, as the previous tables seem to demonstrate. Therefore, it would be reasonable to estimate a Probit or Logit model, which allows the coefficients to vary depending on the values where they are evaluated.
+
+
+\newpage
+
+## Question 2 
+
+### 1.a
+
+Since $E(u|commit) =b_i \cdot (1 - p) - p \cdot c - 10$, and we can assume utility 0 from not commiting a crime we can state that people with $b_i$ higher than  $bi = \frac{{p \cdot c}}{{1 - p}}$ would commit a crime
+
+### 1.b 
+
+Taking into account the answer in part a), we can assume that the individuals caught can be calculated bay multiplying the share of individuals that commit a crime for the probability of getting caught. $(\frac{{p \cdot c}}{{1 - p}}) \cdot p$
+By operating we obtain: $(1 - \frac{c}{-p}) \cdot p$
+
+### 1.c
+
+We could think of this problem as: $\frac{d}{dc} \left( (1 - \frac{c}{-p}) \cdot p \right)$
+
+Wich is equal to: 
+
+$p \cdot \frac{d}{dc} \left( 1 - \frac{c}{-p} \right)$
+
+Simplifying:
+
+$p \cdot \left( 0 - \frac{1}{-p} \right) = 1$
+
+Since, the share of individuals who commit a crime would increase by 1 if there is an infinitesimal increase in the cost of punishment. Taking this into account, the share of individuals who get cough would increase in $p$.
+
+### 1.d 
+
+I calculated the change in the share of individuals who commit a crime with respect to changes in the cost of punishment but we have no information about the willingness of recipients to pay for the policy change.
+
+### 2.a
+
+The cost would be $(1 - \frac{c}{-p}) \cdot 10$
+
+### 2.b 
+
+Similar as in part one, we first simplify the expression:
+
+$(1 - \frac{c}{-p})\cdot 10 = 10 -\frac{10c}{-p}$
+
+And we get: 
+
+$\frac{d}{dc}((1 - \frac{c}{-p}) \cdot 10) = -\frac{p}{10} = \frac{p}{10}$
+
+The government´s cost increases by $\frac{p}{10}$
+
+### 2.c
+
+In would need to understand how the policy affects the government´s long-run cost, which includes immediate costs but also the behavioral responses of individuals to the policy changes. This would depend on how the policy influences individual´s behavior and their responses to the changes in incentives. Without detailed information about these effects, we cannot provide a closed-form expression for the denominator.
