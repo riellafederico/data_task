@@ -1,0 +1,374 @@
+---
+title: "Partisan Elections"
+output:   
+         pdf_document: default
+         html_document: default
+author: "Federico Riella"
+date: "2023-11-02"
+---
+
+```{r setup, include=F , eval=T}
+
+##### load packages ####
+
+library(tidyverse)
+library(latex2exp)
+library(dplyr)
+library(readxl)
+library(binsreg)
+library(ggplot2)
+library(wCorr)
+library(mgcv)
+library(psycho)
+library(corrplot)
+library(xtable)
+library(Hmisc)
+library(rmarkdown)
+library(gt)
+library(extraDistr)
+library(rlang)
+library(knitr)
+library(kableExtra)
+library(stringr)
+library(gtsummary)
+library(stargazer)
+library(rvest)
+library(tools)
+
+
+#### set Working Directory (if running the code please set you own) ####
+
+setwd("")
+
+#### load databases ####
+
+lawyers_donations <- read.delim("lawyers_donations.csv", sep = ",")
+
+lawyers_donations$amount <- abs(lawyers_donations$amount) #correct negative values of donations 
+
+# We turn state names of lawyers data base into title case in order to facilitate handling the data base
+
+list <- as.list(lawyers_donations$state_name)
+
+title_case_state_names <- lapply(list, str_to_title)
+
+lawyers_donations$state_name <- as.character(title_case_state_names)
+
+
+
+nonlaw_indivs_donations <- read.delim("nonlaw_indivs_donations.csv", sep = ",")
+
+nonlaw_indivs_donations$amount <- abs(nonlaw_indivs_donations$amount) #correct negative values of donations 
+
+# We transform to title case contributor´s names for aesthetics
+
+list <- as.list(nonlaw_indivs_donations$contributor)
+
+title_case_contributor_names <- lapply(list, str_to_title)
+
+nonlaw_indivs_donations$contributor <- as.character(title_case_contributor_names)
+
+
+
+law_firms_donations <- read_html("law_firms_donations.html")
+
+law_firms_donations <- law_firms_donations %>%
+ html_nodes("table") %>%
+    html_table(fill = TRUE) %>%
+  as.data.frame()
+
+# We turn state names of lawyers data base into title case in order to facilitate handling the data base
+
+list <- as.list(law_firms_donations$state_name)
+
+title_case_state_names <- lapply(list, str_to_title)
+
+law_firms_donations$state_name <- as.character(title_case_state_names)
+
+# We do the same with contributors name
+
+list <- as.list(law_firms_donations$contributor)
+
+title_case_contributor_names <- lapply(list, str_to_title)
+
+law_firms_donations$contributor <- as.character(title_case_contributor_names)
+
+
+
+
+nonlaw_firms_donations <- read_html("nonlaw_firms_donations.html")
+
+nonlaw_firms_donations <- nonlaw_firms_donations %>%
+ html_nodes("table") %>%
+    html_table(fill = TRUE) %>%
+  as.data.frame()
+
+
+
+state_chars_text <- read_html("state_chars_text.html")
+
+state_chars_text <- state_chars_text %>%
+ html_nodes("table") %>%
+    html_table(fill = TRUE) %>%
+  as.data.frame()
+
+#We delete duplicated columns
+
+state_chars_text <- state_chars_text[-c(11,23),]
+
+```
+
+```{r 1, include=F , eval=T}
+
+#### 1.a ####
+
+# Seek for the word "binding" in the interim_appointment column in order to determine if there is a binding comission. If true we set value 1, else 0
+
+state_chars_text$binding_comission <- ifelse(grepl(" binding", state_chars_text$interim_appointment_method, ignore.case = TRUE), 1, 0)
+
+#### 1.b ####
+
+# We run the same procedure but now seeking for the word "partisan". Since some states have changed their procedure with time, the selected criteria sets the variables as 1 if for most of the time a state has faced partisan elections.
+
+state_chars_text$partisan_election <- ifelse(grepl(" partisan", state_chars_text$first_term_method, ignore.case = TRUE), 1, 0)
+
+#### 1.c ####
+
+# Now we seek for "retention election". In this case, the criteria to set the variable as 1 would be if the states has the possibility to have a retention election, or directly retention elections.
+
+state_chars_text$retention <- ifelse(grepl("retention election", state_chars_text$additional_term_method, ignore.case = TRUE), 1, 0)
+
+```
+
+# 2.
+
+```{r 2, include=T , eval=T, echo=F}
+
+#we join the lawyers donations database with its corresponding state characteristics
+
+aux_df <- merge(x = lawyers_donations, y = state_chars_text, by.x = "state_name", by.y ="state_name", all.x = TRUE)
+
+# We perform the same join with state characteristics but now to non-lawyers individuals
+
+aux_df2 <- merge(x = nonlaw_indivs_donations, y = state_chars_text, by.x = "state_name", by.y ="state_name", all.x = TRUE)
+
+# Now, we delete two columns from our last auxiliary data frame, in order to match column names (aiming to append the new data frames)
+
+aux_df2 <- aux_df2[,-c(19,20)]
+
+# Since we have the same columns in both data frames but with different names, we can match them 
+
+colnames(aux_df2) <- colnames(aux_df)
+
+#we append the data
+
+final_df <- as.data.frame(rbind(aux_df, aux_df2))
+
+# we filter the states that have term-lengths of 6 years
+
+final_df_6 <- final_df %>% filter(final_df$term_length == 6)
+
+# we make a gt table  
+
+summary_df <- final_df_6 %>%
+  summarise(
+    Minimum = min(amount),
+    Maximum = max(amount),
+    Median = median(amount),
+    IQR = IQR(amount),
+    Mean = mean(amount), .by = state_name
+  )
+
+summary_table <- summary_df %>%
+  gt() %>%
+  fmt_number(
+    columns = c(Minimum, Maximum, Median, IQR, Mean),
+    decimals = 2
+  ) %>%
+  tab_header(
+    title = "Summary Statistics by State",
+    subtitle = "Donation Stats by Individuals") %>%
+    cols_label (state_name = "State",  Minimum = "Minimum",
+    Maximum = "Maximum",
+    Median = "Median",
+    IQR = "IQR",
+    Mean = "Mean") 
+  
+summary_table
+
+#now we compute the same statistics but only for lawyer individuals (we use only aux_df who had only lawyers donations info)
+
+summary_df_2 <- aux_df %>%
+  summarise(
+    Minimum = min(amount),
+    Maximum = max(amount),
+    Median = median(amount),
+    IQR = IQR(amount),
+    Mean = mean(amount), .by = state_name
+  )
+
+summary_table_2 <- summary_df_2 %>%
+  gt() %>%
+  fmt_number(
+    columns = c(Minimum, Maximum, Median, IQR, Mean),
+    decimals = 2
+  ) %>%
+  tab_header(
+    title = "Summary Statistics by State",
+    subtitle = "Donation Stats by Lawyers") %>%
+cols_label (state_name = "State",  Minimum = "Minimum",
+    Maximum = "Maximum",
+    Median = "Median",
+    IQR = "IQR",
+    Mean = "Mean") 
+
+summary_table_2
+
+```
+
+# 3.
+
+In this section we faced a lot of registers with NaN. If we can trust that this doners would not be relevant to the overall analysis, or they do not follow a specific pattern, we can rely on the following table.
+
+```{r 3, include=T , eval=T, echo=F}
+
+# we select, from the law firms donations data, just the state of Ohio, and discard info with na´s in the name of the contributor
+
+law_firms_donations_Ohio <- law_firms_donations %>% filter(state_name == "Ohio")  %>% filter(contributor != "Nan") 
+
+# we calculate the total donations by firm with the aggregate function
+
+total_donations_by_firm <- aggregate(amount ~ contributor, data = law_firms_donations_Ohio, FUN = sum)
+
+# finally we select top 10
+
+total_donations_by_firm_top10 <- total_donations_by_firm[order(total_donations_by_firm$amount, decreasing = TRUE),]   %>% slice(1:10)
+
+# we print the data into a gt table
+
+top_10_table <- total_donations_by_firm_top10 %>%
+  gt() %>%
+  tab_header(
+    title = "Law Firms Donations in Ohio",
+    subtitle = "Top 10") %>%
+cols_label (contributor = "Contributor",  amount = "Amount") 
+  
+
+top_10_table
+
+```
+
+# 4.
+
+Now we face the same limitations that we did above. But, even with our current data quality, we can state that Pennsylvania seems to be the outstanding state in this terms.
+
+```{r 4, include=T , eval=T, echo=F}
+
+#We use the auxiliary data frame we used in part 2 and filter the donors that had donated to states that have retention variable = 1
+
+aux_df2 <- aux_df2 %>% filter(retention == 1)
+
+
+# we calculate the total donations by individual with the aggregate function
+
+total_donations_by_individual <- aggregate(amount ~ contributor + state_name, data = aux_df2, FUN = sum)
+
+# finally we select top 10
+
+total_donations_by_individual_top10 <- total_donations_by_individual[order(total_donations_by_individual$amount, decreasing = TRUE),]   %>% slice(1:10)
+
+#we set the table options and include state names
+
+table <- total_donations_by_individual_top10 %>%
+  gt() %>%
+  tab_header(
+    title = "Largest Non-lawyer Donors",
+    subtitle = "Top 10") %>% cols_label (contributor = "Contributor", state_name = "State",  amount = "Amount") 
+
+table
+
+```
+\newpage
+# 5.
+
+## a)
+
+As we can see in the table above, here we have conducted simple linear model in the attempt to explain the amount of donations based in the state characteristics. The model would be the following: $amount = \beta_0 + \beta_1 \cdot retention + \beta_2 \cdot partisan\_election + \varepsilon$\
+
+We could say that there is significant evidence in favor that, ceteris paribus, having retention elections, in comparison with not having  them, increases the donations amount, in average, by approximately 413 dolars. 
+
+Also, having partisan elections, as it seems obvious, is also significant. Particularly, ceteris paribus, having partisan elections, in comparison with not having them, increases the donations amount, in average, by approximately 347 dolars. 
+
+Finally, having binding commissions seem to be less significant (p_value neer to 0.1) in order to explain donations amount.
+
+```{r 5.a, include=T , eval=T, echo=F}
+
+#### 5.a ####
+
+# We sum up all donations and select key variables for analysis
+
+final_df <- final_df %>% select(amount, state_name, partisan_election, binding_comission, retention, election_status)
+
+law_firms_donations <- merge(x = law_firms_donations, y = state_chars_text, by.x = "state_name", by.y ="state_name", all.x = TRUE)
+
+law_firms_donations <- law_firms_donations %>% select(amount, state_name, partisan_election, binding_comission, retention, election_status)
+
+colnames(law_firms_donations) <- colnames(final_df)
+
+nonlaw_firms_donations <- merge(x = nonlaw_firms_donations, y = state_chars_text, by.x = "state.name", by.y ="state_name", all.x = TRUE)
+
+nonlaw_firms_donations <- law_firms_donations %>% select(amount, state_name, partisan_election, binding_comission, retention, election_status)
+
+colnames(nonlaw_firms_donations) <- colnames(final_df)
+
+all_donations <- rbind(final_df, law_firms_donations, nonlaw_firms_donations)
+
+# we run a simpler linear regression to determine if any state characteristics affect donations
+
+lm <- lm(data = all_donations, amount ~ retention + binding_comission + partisan_election) # run the linear regression
+
+coef <- (summary(lm)$coefficients)
+r_squared <- (summary(lm)$r.squared)
+lm_sum <- rbind(coef, r_squared)
+
+#Resume t
+
+kable(lm_sum, format = "latex", booktabs = TRUE, longtable = FALSE ,
+    caption = "Linear Regression Results Bottom 50", align = "lccc" ,
+      col.names = c("Coefficient", "Std. Error", "t-value", "P-value"),  placement = "[htbp]" )
+```
+\newpage
+
+## b)
+
+In this histogram I have tried to resume the relation between election outcomes and donations amount. It´s clear that winner´s seem to get a lot more donations that loosers do. Although it would be interesting to seek for some additional information, as same candidates performance without donations in another election, to determine if there is a casual relation. We could ask if donations attract winning candidates or if winning candidates attract donations. 
+
+
+
+```{r 5.b, include=T , eval=T, echo=F}
+#### 5.b ####
+
+#we summarise the amount of total donations by election outcome and select a top 5
+
+  sum_donations <- all_donations %>%
+  group_by(election_status) %>%
+  summarise(total_donations = as.numeric(sum(amount)))
+
+sum_donations <- sum_donations[order(sum_donations$total_donations, decreasing = TRUE),]   %>%  slice(1:5)
+
+plot <- ggplot(sum_donations, aes(x = election_status, y = total_donations, fill = election_status)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(title = "Donations and Election Outcomes",
+       subtitle = "Top Five Outcomes With More Donations",
+       x = "Election Outcome",
+       y = "Total Donations") +
+  scale_fill_discrete(name = "Election Outcome") + 
+  theme_minimal() +
+  theme(legend.position = "top", plot.title = element_text(hjust = 0.5),
+        plot.subtitle = element_text(hjust = 0.5),
+        legend.key.size = unit(0.2, "cm"))
+
+
+print(plot)
+
+```
