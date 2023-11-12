@@ -12,7 +12,7 @@ library(Hmisc)
 library(rmarkdown)
 library(gt)
 library(extraDistr)
-setwd("C:/Users/riell/Desktop/Data Task/data_task_2022/Data")
+setwd("")
 
 
 county_outcomes <- read.delim("county_outcomes.csv", sep = ",")
